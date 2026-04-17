@@ -5,11 +5,24 @@ from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
 
+
 KST = ZoneInfo("Asia/Seoul")
 WEEKDAY_LABELS = ["월", "화", "수", "목", "금"]
 
+
 def get_menu_url():
-    return os.environ["BABFULL_MENU_URL"]
+    url = os.environ.get("BABFULL_MENU_URL")
+    if not url:
+        raise RuntimeError("BABFULL_MENU_URL 환경변수가 설정되지 않았습니다.")
+    return url
+
+
+def get_webhook_url():
+    url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not url:
+        raise RuntimeError("DISCORD_WEBHOOK_URL 환경변수가 설정되지 않았습니다.")
+    return url
+
 
 def fetch_soup():
     response = requests.get(
@@ -20,8 +33,44 @@ def fetch_soup():
     response.raise_for_status()
     return BeautifulSoup(response.text, "html.parser")
 
+
 def normalize(text):
     return " ".join(text.replace("\xa0", " ").split()).strip()
+
+
+def extract_cell_text(cell):
+    text = normalize(cell.get_text(" ", strip=True))
+
+    if not text:
+        return ""
+
+    vote_tokens = ["👍", "👎", "/", "0"]
+
+    if "👍" in text or "👎" in text:
+        parts = text.split()
+        filtered_parts = []
+
+        skip_next_zero = False
+        for part in parts:
+            if part in {"👍", "👎"}:
+                skip_next_zero = True
+                continue
+
+            if skip_next_zero and part == "0":
+                skip_next_zero = False
+                continue
+
+            if part == "/":
+                continue
+
+            filtered_parts.append(part)
+
+        text = " ".join(filtered_parts)
+
+    if text in vote_tokens:
+        return ""
+
+    return normalize(text)
 
 
 def parse_date_headers(table):
@@ -45,12 +94,11 @@ def extract_section_rows(table, section_name):
 
     for row in rows[1:]:
         cells = row.find_all(["th", "td"])
-        values = [normalize(cell.get_text(" ", strip=True)) for cell in cells]
-
-        if not values:
+        if not cells:
             continue
 
-        joined = " ".join(values)
+        values = [extract_cell_text(cell) for cell in cells]
+        joined = " ".join(v for v in values if v)
 
         if "조식" in joined:
             if section_name == "조식":
@@ -83,9 +131,18 @@ def parse_menu_by_day(section_rows):
 
     for row in section_rows:
         for col in range(5):
-            value = row[col].strip()
-            if value:
-                result[col].append(value)
+            value = normalize(row[col])
+
+            if not value:
+                continue
+
+            if "👍" in value or "👎" in value:
+                continue
+
+            if value in {"0", "/"}:
+                continue
+
+            result[col].append(value)
 
     return result
 
@@ -211,16 +268,14 @@ def build_weekly_embed(headers, breakfast_by_day, lunch_by_day):
         breakfast_items = breakfast_by_day.get(day_idx, [])
         lunch_items = lunch_by_day.get(day_idx, [])
 
+        day_lines.append("[조식]")
         if breakfast_items:
-            day_lines.append("[조식]")
             day_lines.extend(f"• {item}" for item in breakfast_items)
         else:
-            day_lines.append("[조식]")
             day_lines.append("• 조식 메뉴가 없습니다.")
 
         day_lines.append("")
         day_lines.append("[중식]")
-
         if lunch_items:
             day_lines.extend(f"• {item}" for item in lunch_items)
         else:
@@ -239,13 +294,13 @@ def build_weekly_embed(headers, breakfast_by_day, lunch_by_day):
     }
 
 
-def send_discord(embed):
-    webhook_url = os.environ["DISCORD_WEBHOOK_URL"]
+def send_discord_embed(embed):
     payload = {
         "username": "오늘의 학식",
         "embeds": [embed]
     }
-    response = requests.post(webhook_url, json=payload, timeout=20)
+
+    response = requests.post(get_webhook_url(), json=payload, timeout=20)
     response.raise_for_status()
 
 
@@ -255,10 +310,10 @@ def main():
 
     if now.weekday() == 0:
         weekly_embed = build_weekly_embed(headers, breakfast_by_day, lunch_by_day)
-        send_discord(weekly_embed)
+        send_discord_embed(weekly_embed)
 
     today_embed = build_today_embed(headers, breakfast_by_day, lunch_by_day)
-    send_discord(today_embed)
+    send_discord_embed(today_embed)
 
 
 if __name__ == "__main__":
