@@ -16,10 +16,10 @@ def get_menu_url():
     return url
 
 
-def get_weekly_webhook_url():
-    url = os.environ.get("DISCORD_WEEKLY_WEBHOOK_URL")
+def get_webhook_url():
+    url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not url:
-        raise RuntimeError("DISCORD_WEEKLY_WEBHOOK_URL 환경변수가 설정되지 않았습니다.")
+        raise RuntimeError("DISCORD_WEBHOOK_URL 환경변수가 설정되지 않았습니다.")
     return url
 
 
@@ -231,7 +231,7 @@ def send_discord_embed(embed):
         "embeds": [embed]
     }
 
-    response = requests.post(get_weekly_webhook_url(), json=payload, timeout=20)
+    response = requests.post(get_webhook_url(), json=payload, timeout=20)
     response.raise_for_status()
 
 
