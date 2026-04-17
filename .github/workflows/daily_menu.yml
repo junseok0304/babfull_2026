@@ -1,0 +1,28 @@
+name: Daily Menu
+
+on:
+    schedule:
+        - cron: "7 0 * * 1-5"
+    workflow_dispatch:
+
+jobs:
+    send-menu:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+
+            - name: Install dependencies
+              run: pip install -r requirements.txt
+
+            - name: Run menu bot
+              env:
+                  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+                  BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
+              run: python menu_bot.py
