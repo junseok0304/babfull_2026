@@ -21,8 +21,14 @@ jobs:
             - name: Install dependencies
               run: pip install -r requirements.txt
 
-            - name: Run menu bot
+            - name: Run daily menu bot
               env:
                   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
                   BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
               run: python menu_bot.py
+
+            - name: Run weekly menu image bot
+              env:
+                  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+                  BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
+              run: python sikdan_image.py
