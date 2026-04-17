@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -181,56 +182,30 @@ def is_this_week(headers):
         return False
 
 
-def build_weekly_rows(headers, breakfast_by_day, lunch_by_day):
-    rows = []
-
-    for day_idx in range(5):
-        breakfast_items = breakfast_by_day.get(day_idx, [])
-        lunch_items = lunch_by_day.get(day_idx, [])
-
-        breakfast_text = "\n".join(f"• {item}" for item in breakfast_items) if breakfast_items else "조식 메뉴가 없습니다."
-        lunch_text = "\n".join(f"• {item}" for item in lunch_items) if lunch_items else "중식 메뉴가 없습니다."
-
-        rows.append({
-            "day": headers[day_idx],
-            "breakfast": breakfast_text,
-            "lunch": lunch_text
-        })
-
-    return rows
-
-
 def load_font(size, bold=False):
-    candidates = [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc" if bold else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf" if bold else "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
-        "C:/Windows/Fonts/malgun.ttf"
-    ]
+    font_path = "fonts/Pretendard-Bold.otf" if bold else "fonts/Pretendard-Regular.otf"
 
-    if bold:
-        candidates = [
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-            "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
-            "C:/Windows/Fonts/malgunbd.ttf",
-            "C:/Windows/Fonts/malgun.ttf"
-        ]
+    if not os.path.exists(font_path):
+        raise RuntimeError(
+            f"{font_path} 파일을 찾지 못했습니다. "
+            "fonts 폴더에 Pretendard-Regular.otf, Pretendard-Bold.otf를 넣어주세요."
+        )
 
-    for path in candidates:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, size=size)
-
-    return ImageFont.load_default()
+    return ImageFont.truetype(font_path, size=size)
 
 
-def wrap_text(draw, text, font, max_width):
+def get_line_height(draw, font):
+    box = draw.textbbox((0, 0), "가나다ABC123", font=font)
+    return (box[3] - box[1]) + 12
+
+
+def wrap_text_by_char(draw, text, font, max_width):
+    text = normalize(text)
     if not text:
         return [""]
 
     lines = []
+
     for paragraph in text.split("\n"):
         paragraph = paragraph.strip()
         if not paragraph:
@@ -238,17 +213,17 @@ def wrap_text(draw, text, font, max_width):
             continue
 
         current = ""
-        for token in paragraph.split(" "):
-            test = token if not current else f"{current} {token}"
-            bbox = draw.textbbox((0, 0), test, font=font)
-            width = bbox[2] - bbox[0]
+        for ch in paragraph:
+            candidate = current + ch
+            box = draw.textbbox((0, 0), candidate, font=font)
+            width = box[2] - box[0]
 
             if width <= max_width:
-                current = test
+                current = candidate
             else:
                 if current:
                     lines.append(current)
-                current = token
+                current = ch
 
         if current:
             lines.append(current)
@@ -256,151 +231,261 @@ def wrap_text(draw, text, font, max_width):
     return lines if lines else [""]
 
 
-def calc_line_height(draw, font):
-    bbox = draw.textbbox((0, 0), "가A", font=font)
-    return (bbox[3] - bbox[1]) + 8
+def make_day_title(header):
+    month_day = header.split("(")[0].strip()
+    weekday = header.split("(")[1].replace(")", "").strip()
+
+    weekday_map = {
+        "Mon": "월",
+        "Tue": "화",
+        "Wed": "수",
+        "Thu": "목",
+        "Fri": "금"
+    }
+
+    weekday_kr = weekday_map.get(weekday, weekday)
+    return f"{month_day}\n{weekday_kr}"
+
+
+def join_menu_lines(items, empty_message):
+    if not items:
+        return empty_message
+    return "\n".join(f"• {item}" for item in items)
 
 
 def create_weekly_menu_image(headers, breakfast_by_day, lunch_by_day, output_path):
-    title_font = load_font(34, bold=True)
-    header_font = load_font(22, bold=True)
-    body_font = load_font(20, bold=False)
-    small_font = load_font(16, bold=False)
+    title_font = load_font(56, bold=True)
+    subtitle_font = load_font(28, bold=False)
+    header_font = load_font(34, bold=True)
+    meal_font = load_font(36, bold=True)
+    body_font = load_font(28, bold=False)
+    footer_font = load_font(22, bold=False)
 
     temp_img = Image.new("RGB", (1, 1), "white")
     temp_draw = ImageDraw.Draw(temp_img)
 
-    rows = build_weekly_rows(headers, breakfast_by_day, lunch_by_day)
+    width = 2200
+    outer_padding = 50
+    title_top = 45
+    title_gap = 25
+    table_top_gap = 35
 
-    width = 1700
-    padding = 40
-    title_height = 70
-    subtitle_height = 40
-    header_height = 60
-    col_day = 220
-    col_breakfast = 620
-    col_lunch = 620
-    table_width = col_day + col_breakfast + col_lunch
+    left_label_width = 220
+    day_col_width = 390
+    header_height = 130
+    row_padding_y = 30
+    cell_padding_x = 22
+    cell_padding_y = 20
 
-    line_h = calc_line_height(temp_draw, body_font)
-    cell_padding_x = 18
-    cell_padding_y = 14
+    line_height = get_line_height(temp_draw, body_font)
 
-    wrapped_rows = []
-    total_rows_height = 0
+    breakfast_cells = []
+    lunch_cells = []
 
-    for row in rows:
-        day_lines = wrap_text(temp_draw, row["day"], body_font, col_day - cell_padding_x * 2)
-        breakfast_lines = wrap_text(temp_draw, row["breakfast"], body_font, col_breakfast - cell_padding_x * 2)
-        lunch_lines = wrap_text(temp_draw, row["lunch"], body_font, col_lunch - cell_padding_x * 2)
+    for i in range(5):
+        breakfast_text = join_menu_lines(breakfast_by_day.get(i, []), "조식 메뉴가 없습니다.")
+        lunch_text = join_menu_lines(lunch_by_day.get(i, []), "중식 메뉴가 없습니다.")
 
-        row_line_count = max(len(day_lines), len(breakfast_lines), len(lunch_lines))
-        row_height = cell_padding_y * 2 + row_line_count * line_h
+        breakfast_cells.append(
+            wrap_text_by_char(temp_draw, breakfast_text, body_font, day_col_width - cell_padding_x * 2)
+        )
+        lunch_cells.append(
+            wrap_text_by_char(temp_draw, lunch_text, body_font, day_col_width - cell_padding_x * 2)
+        )
 
-        wrapped_rows.append({
-            "day_lines": day_lines,
-            "breakfast_lines": breakfast_lines,
-            "lunch_lines": lunch_lines,
-            "row_height": row_height
-        })
-        total_rows_height += row_height
+    breakfast_max_lines = max(len(lines) for lines in breakfast_cells)
+    lunch_max_lines = max(len(lines) for lines in lunch_cells)
 
-    height = padding + title_height + subtitle_height + header_height + total_rows_height + padding + 20
+    breakfast_row_height = cell_padding_y * 2 + breakfast_max_lines * line_height + row_padding_y
+    lunch_row_height = cell_padding_y * 2 + lunch_max_lines * line_height + row_padding_y
 
-    img = Image.new("RGB", (width, height), "#f7f8fa")
+    table_width = left_label_width + day_col_width * 5
+    table_height = header_height + breakfast_row_height + lunch_row_height
+
+    title_box = temp_draw.textbbox((0, 0), "밥full 주간 식단표", font=title_font)
+    subtitle_box = temp_draw.textbbox((0, 0), "조식 / 중식 기준", font=subtitle_font)
+
+    title_height = title_box[3] - title_box[1]
+    subtitle_height = subtitle_box[3] - subtitle_box[1]
+
+    footer_height = 40
+    height = (
+        outer_padding
+        + title_top
+        + title_height
+        + title_gap
+        + subtitle_height
+        + table_top_gap
+        + table_height
+        + 70
+        + footer_height
+        + outer_padding
+    )
+
+    img = Image.new("RGB", (width, height), "#f5f7fb")
     draw = ImageDraw.Draw(img)
 
     table_x = (width - table_width) // 2
-    y = padding
+    y = outer_padding + title_top
 
-    draw.text((table_x, y), "성공회대학교 밥full 주간 식단", font=title_font, fill="#111111")
-    y += title_height
+    draw.text((table_x, y), "밥full 주간 식단표", font=title_font, fill="#111111")
+    y += title_height + title_gap
 
-    subtitle = "스크래핑 기준 주간 식단표"
-    draw.text((table_x, y), subtitle, font=small_font, fill="#555555")
-    y += subtitle_height
+    draw.text((table_x, y), "조식 / 중식 기준", font=subtitle_font, fill="#5b6470")
+    y += subtitle_height + table_top_gap
+
+    table_y = y
+    table_bottom = table_y + table_height
 
     draw.rounded_rectangle(
-        (table_x, y, table_x + table_width, y + header_height + total_rows_height),
-        radius=18,
+        (table_x, table_y, table_x + table_width, table_bottom),
+        radius=28,
         fill="white",
-        outline="#d9dce1",
-        width=2
+        outline="#d8dee8",
+        width=3
     )
+
+    draw.rounded_rectangle(
+        (table_x, table_y, table_x + table_width, table_y + header_height),
+        radius=28,
+        fill="#e8eefc",
+        outline=None
+    )
+    draw.rectangle(
+        (table_x, table_y + header_height - 28, table_x + table_width, table_y + header_height),
+        fill="#e8eefc"
+    )
+
+    meal_row_y = table_y + header_height
+    lunch_row_y = meal_row_y + breakfast_row_height
 
     draw.rectangle(
-        (table_x, y, table_x + table_width, y + header_height),
-        fill="#eef3ff"
+        (table_x, meal_row_y, table_x + table_width, meal_row_y + breakfast_row_height),
+        fill="#fffdf9"
+    )
+    draw.rectangle(
+        (table_x, lunch_row_y, table_x + table_width, lunch_row_y + lunch_row_height),
+        fill="#fbfcff"
     )
 
-    x1 = table_x
-    x2 = x1 + col_day
-    x3 = x2 + col_breakfast
-    x4 = x3 + col_lunch
+    x_positions = [table_x, table_x + left_label_width]
+    for i in range(1, 6):
+        x_positions.append(table_x + left_label_width + day_col_width * i)
 
-    for x in [x2, x3]:
-        draw.line((x, y, x, y + header_height + total_rows_height), fill="#d9dce1", width=2)
+    for x in x_positions[1:-1]:
+        draw.line((x, table_y, x, table_bottom), fill="#d8dee8", width=3)
 
-    draw.line((x1, y + header_height, x4, y + header_height), fill="#d9dce1", width=2)
+    draw.line(
+        (table_x, table_y + header_height, table_x + table_width, table_y + header_height),
+        fill="#d8dee8",
+        width=3
+    )
+    draw.line(
+        (table_x, lunch_row_y, table_x + table_width, lunch_row_y),
+        fill="#d8dee8",
+        width=3
+    )
 
-    draw.text((x1 + 20, y + 16), "요일", font=header_font, fill="#1a1a1a")
-    draw.text((x2 + 20, y + 16), "조식", font=header_font, fill="#1a1a1a")
-    draw.text((x3 + 20, y + 16), "중식", font=header_font, fill="#1a1a1a")
+    label_box = draw.textbbox((0, 0), "식사", font=header_font)
+    label_h = label_box[3] - label_box[1]
+    draw.text(
+        (table_x + 55, table_y + (header_height - label_h) // 2),
+        "식사",
+        font=header_font,
+        fill="#1b2430"
+    )
 
-    y_cursor = y + header_height
+    for idx, header in enumerate(headers):
+        title = make_day_title(header)
+        col_x = table_x + left_label_width + day_col_width * idx
+        wrapped = title.split("\n")
 
-    for idx, row in enumerate(wrapped_rows):
-        row_bottom = y_cursor + row["row_height"]
+        total_h = 0
+        heights = []
+        for line in wrapped:
+            box = draw.textbbox((0, 0), line, font=header_font)
+            h = box[3] - box[1]
+            heights.append(h)
+            total_h += h
+        total_h += (len(wrapped) - 1) * 8
 
-        if idx > 0:
-            draw.line((x1, y_cursor, x4, y_cursor), fill="#e5e7eb", width=2)
+        current_y = table_y + (header_height - total_h) // 2
+        for line, h in zip(wrapped, heights):
+            box = draw.textbbox((0, 0), line, font=header_font)
+            w = box[2] - box[0]
+            draw.text(
+                (col_x + (day_col_width - w) // 2, current_y),
+                line,
+                font=header_font,
+                fill="#1b2430"
+            )
+            current_y += h + 8
 
-        def draw_multiline(lines, x, top):
-            current_y = top + cell_padding_y
-            for line in lines:
-                draw.text((x + cell_padding_x, current_y), line, font=body_font, fill="#111111")
-                current_y += line_h
+    breakfast_label_box = draw.textbbox((0, 0), "조식", font=meal_font)
+    breakfast_label_h = breakfast_label_box[3] - breakfast_label_box[1]
+    draw.text(
+        (table_x + 58, meal_row_y + (breakfast_row_height - breakfast_label_h) // 2),
+        "조식",
+        font=meal_font,
+        fill="#d46a6a"
+    )
 
-        draw_multiline(row["day_lines"], x1, y_cursor)
-        draw_multiline(row["breakfast_lines"], x2, y_cursor)
-        draw_multiline(row["lunch_lines"], x3, y_cursor)
+    lunch_label_box = draw.textbbox((0, 0), "중식", font=meal_font)
+    lunch_label_h = lunch_label_box[3] - lunch_label_box[1]
+    draw.text(
+        (table_x + 58, lunch_row_y + (lunch_row_height - lunch_label_h) // 2),
+        "중식",
+        font=meal_font,
+        fill="#4c8b5d"
+    )
 
-        y_cursor = row_bottom
+    def draw_lines(lines, x, y_top):
+        current_y = y_top + cell_padding_y
+        for line in lines:
+            draw.text((x + cell_padding_x, current_y), line, font=body_font, fill="#111111")
+            current_y += line_height
 
-    footer_y = y + header_height + total_rows_height + 18
-    today = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    footer = f"생성 시각: {today} (KST)"
-    draw.text((table_x, footer_y), footer, font=small_font, fill="#666666")
+    for idx in range(5):
+        col_x = table_x + left_label_width + day_col_width * idx
+        draw_lines(breakfast_cells[idx], col_x, meal_row_y)
+        draw_lines(lunch_cells[idx], col_x, lunch_row_y)
+
+    footer_y = table_bottom + 28
+    footer_text = f"생성 시각 {datetime.now(KST).strftime('%Y-%m-%d %H:%M')} (KST)"
+    draw.text((table_x, footer_y), footer_text, font=footer_font, fill="#6b7280")
 
     img.save(output_path, format="PNG")
 
 
 def create_notice_image(headers, output_path):
-    title_font = load_font(32, bold=True)
-    body_font = load_font(22, bold=False)
-    small_font = load_font(16, bold=False)
+    title_font = load_font(54, bold=True)
+    body_font = load_font(30, bold=False)
+    small_font = load_font(22, bold=False)
 
-    width = 1200
-    height = 520
-    padding = 50
+    width = 1600
+    height = 700
+    padding = 70
 
-    img = Image.new("RGB", (width, height), "#f7f8fa")
+    img = Image.new("RGB", (width, height), "#f5f7fb")
     draw = ImageDraw.Draw(img)
 
     draw.rounded_rectangle(
         (padding, padding, width - padding, height - padding),
-        radius=24,
+        radius=28,
         fill="white",
-        outline="#d9dce1",
-        width=2
+        outline="#d8dee8",
+        width=3
     )
 
-    draw.text((90, 110), "주간 메뉴가 아직 갱신되지 않았습니다.", font=title_font, fill="#111111")
-    draw.text((90, 190), "사이트의 현재 주간 표", font=body_font, fill="#333333")
-    draw.text((90, 240), " | ".join(headers), font=body_font, fill="#444444")
-
-    today = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    draw.text((90, 360), f"생성 시각: {today} (KST)", font=small_font, fill="#666666")
+    draw.text((120, 150), "주간 메뉴가 아직 갱신되지 않았습니다.", font=title_font, fill="#111111")
+    draw.text((120, 270), "현재 감지된 주간 표", font=body_font, fill="#374151")
+    draw.text((120, 340), " | ".join(headers), font=body_font, fill="#4b5563")
+    draw.text(
+        (120, 500),
+        f"생성 시각 {datetime.now(KST).strftime('%Y-%m-%d %H:%M')} (KST)",
+        font=small_font,
+        fill="#6b7280"
+    )
 
     img.save(output_path, format="PNG")
 
@@ -408,16 +493,21 @@ def create_notice_image(headers, output_path):
 def send_image_to_discord(image_path, headers, is_current_week):
     content = "주간 식단 이미지"
     if not is_current_week:
-        content = f"이번 주 메뉴가 아직 갱신되지 않은 것 같습니다.\n현재 감지된 주간 표: {' | '.join(headers)}"
+        content = (
+            "이번 주 메뉴가 아직 갱신되지 않은 것 같습니다.\n"
+            f"현재 감지된 주간 표: {' | '.join(headers)}"
+        )
+
+    payload = {
+        "content": content
+    }
 
     with open(image_path, "rb") as f:
         files = {
             "files[0]": ("weekly_menu.png", f, "image/png")
         }
         data = {
-            "payload_json": (
-                '{"content": ' + '"' + content.replace('"', '\\"').replace("\n", "\\n") + '"' + "}"
-            )
+            "payload_json": json.dumps(payload, ensure_ascii=False)
         }
         response = requests.post(get_webhook_url(), data=data, files=files, timeout=30)
         response.raise_for_status()
