@@ -27,8 +27,13 @@ jobs:
                   BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
               run: python menu_bot.py
 
-            - name: Run weekly menu image bot
+            - name: Run weekly menu image bot on Monday only
               env:
                   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
                   BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
-              run: python sikdan_image.py
+              run: |
+                  if [ "$(date -u +%u)" = "1" ]; then
+                      python sikdan_image.py
+                  else
+                      echo "Not Monday UTC, skipping weekly menu image."
+                  fi
