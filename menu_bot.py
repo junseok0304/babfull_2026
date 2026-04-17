@@ -293,16 +293,13 @@ def build_weekly_embed(headers, breakfast_by_day, lunch_by_day):
         "fields": fields
     }
 
-
 def send_discord_embed(embed):
     payload = {
-        "username": "오늘의 학식",
         "embeds": [embed]
     }
 
     response = requests.post(get_webhook_url(), json=payload, timeout=20)
     response.raise_for_status()
-
 
 def main():
     headers, breakfast_by_day, lunch_by_day = get_menu_data()
