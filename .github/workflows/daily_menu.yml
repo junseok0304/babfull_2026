@@ -2,11 +2,15 @@ name: Daily Menu
 
 on:
     schedule:
-        - cron: "7 0 * * 1-5"
+        - cron: "17 8 * * 1-5"
+          timezone: "Asia/Seoul"
+        - cron: "17 8 * * 1"
+          timezone: "Asia/Seoul"
     workflow_dispatch:
 
 jobs:
-    send-menu:
+    send-daily-menu:
+        if: github.event.schedule == '17 8 * * 1-5'
         runs-on: ubuntu-latest
 
         steps:
@@ -27,13 +31,24 @@ jobs:
                   BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
               run: python menu_bot.py
 
-            - name: Run weekly menu image bot on Monday only
+    send-weekly-menu:
+        if: github.event.schedule == '17 8 * * 1'
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+
+            - name: Install dependencies
+              run: pip install -r requirements.txt
+
+            - name: Run weekly menu image bot
               env:
                   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
                   BABFULL_MENU_URL: ${{ secrets.BABFULL_MENU_URL }}
-              run: |
-                  if [ "$(date -u +%u)" = "1" ]; then
-                      python sikdan_image.py
-                  else
-                      echo "Not Monday UTC, skipping weekly menu image."
-                  fi
+              run: python sikdan_image.py
